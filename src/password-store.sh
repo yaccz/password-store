@@ -155,17 +155,24 @@ check_sneaky_paths() {
 #
 
 clip() {
+	local primary=${3:-0}
+
 	if [[ -n $WAYLAND_DISPLAY ]] && command -v wl-copy &> /dev/null; then
 		local copy_cmd=( wl-copy )
 		local paste_cmd=( wl-paste -n )
-		if [[ $X_SELECTION == primary ]]; then
+		if [[ $X_SELECTION == primary || $primary -eq 1 ]]; then
 			copy_cmd+=( --primary )
 			paste_cmd+=( --primary )
 		fi
 		local display_name="$WAYLAND_DISPLAY"
 	elif [[ -n $DISPLAY ]] && command -v xclip &> /dev/null; then
-		local copy_cmd=( xclip -selection "$X_SELECTION" )
-		local paste_cmd=( xclip -o -selection "$X_SELECTION" )
+		if [[ $primary -eq 1 ]] ; then
+			local copy_cmd=( xclip -selection primary )
+			local paste_cmd=( xclip -o -selection primary )
+		else
+			local copy_cmd=( xclip -selection "$X_SELECTION" )
+			local paste_cmd=( xclip -o -selection "$X_SELECTION" )
+		fi
 		local display_name="$DISPLAY"
 	else
 		die "Error: No X11 or Wayland display and clipper detected"
@@ -366,32 +373,34 @@ cmd_init() {
 }
 
 cmd_show() {
-	local opts selected_line clip=0 qrcode=0
-	opts="$($GETOPT -o q::c:: -l qrcode::,clip:: -n "$PROGRAM" -- "$@")"
+	local opts selected_line clip=0 qrcode=0 primary=1
+	opts="$($GETOPT -o q::c::p:: -l qrcode::,clip::,primary:: -n "$PROGRAM" -- "$@")"
 	local err=$?
 	eval set -- "$opts"
 	while true; do case $1 in
 		-q|--qrcode) qrcode=1; selected_line="${2:-1}"; shift 2 ;;
 		-c|--clip) clip=1; selected_line="${2:-1}"; shift 2 ;;
+		-p|--primary) primary=1; selected_line="${2:-1}"; shift 2 ;;
 		--) shift; break ;;
 	esac done
 
-	[[ $err -ne 0 || ( $qrcode -eq 1 && $clip -eq 1 ) ]] && die "Usage: $PROGRAM $COMMAND [--clip[=line-number],-c[line-number]] [--qrcode[=line-number],-q[line-number]] [pass-name]"
+	[[ $err -ne 0 || ( $qrcode -eq 1 && $clip -eq 1 ) || ( $qrcode -eq 1 && $primary -eq 1 ) || (
+	$primary -eq 1 && $clip -eq 1 ) ]] && die "Usage: $PROGRAM $COMMAND [--clip[=line-number],-c[line-number]] [--qrcode[=line-number],-q[line-number]] [pass-name]"
 
 	local pass
 	local path="$1"
 	local passfile="$PREFIX/$path.gpg"
 	check_sneaky_paths "$path"
 	if [[ -f $passfile ]]; then
-		if [[ $clip -eq 0 && $qrcode -eq 0 ]]; then
+		if [[ $clip -eq 0 && $qrcode -eq 0 && $primary -eq 0 ]]; then
 			pass="$($GPG -d "${GPG_OPTS[@]}" "$passfile" | $BASE64)" || exit $?
 			echo "$pass" | $BASE64 -d
 		else
 			[[ $selected_line =~ ^[0-9]+$ ]] || die "Clip location '$selected_line' is not a number."
 			pass="$($GPG -d "${GPG_OPTS[@]}" "$passfile" | tail -n +${selected_line} | head -n 1)" || exit $?
 			[[ -n $pass ]] || die "There is no password to put on the clipboard at line ${selected_line}."
-			if [[ $clip -eq 1 ]]; then
-				clip "$pass" "$path"
+			if [[ $clip -eq 1 || $primary -eq 1 ]]; then
+				clip "$pass" "$path" $primary
 			elif [[ $qrcode -eq 1 ]]; then
 				qrcode "$pass" "$path"
 			fi
